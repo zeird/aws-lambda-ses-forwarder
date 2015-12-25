@@ -1,4 +1,4 @@
-console.log('AWS Lambda SES Forwarder // @arithmetric // Version 1.0.0');
+console.log('AWS Lambda SES Forwarder // @zeird // Version 1.1.0');
 
 // Configure the S3 bucket and key prefix for stored raw emails, and the
 // mapping of email addresses to forward from and to.
@@ -8,8 +8,8 @@ console.log('AWS Lambda SES Forwarder // @arithmetric // Version 1.0.0');
 // - emailKeyPrefix: S3 key name prefix where SES stores email. Include the
 //   trailing slash.
 // - forwardMapping: Object where the key is the email address from which to
-//   forward and the value is an array of email addresses to which to send the
-//   message.
+//   forward and the value is an array of email addresses or a single string
+//   with email address to which to send the message.
 var config = {
     'emailBucket': 's3-bucket-name',
     'emailKeyPrefix': 'emailsPrefix/',
@@ -18,9 +18,7 @@ var config = {
             'example.john@example.com',
             'example.jen@example.com'
         ],
-        'abuse@example.com': [
-            'example.jim@example.com'
-        ]
+        'abuse@example.com': 'example.jim@example.com'
     }
 };
 
@@ -28,80 +26,69 @@ var aws = require('aws-sdk');
 var ses = new aws.SES();
 var s3 = new aws.S3();
 
-exports.handler = function (event, context) {
+exports.handler = function (aEvent, aContext) {
     // Validate characteristics of a SES event record.
-    if (!event.hasOwnProperty('Records') || event.Records.length !== 1 ||
-        !event.Records[0].hasOwnProperty('eventSource') || event.Records[0].eventSource !== 'aws:ses' ||
-        event.Records[0].eventVersion !== '1.0') {
-        return context.fail('Error: Expecting event with source aws:ses and version 1.0, but received: ' + JSON.stringify(event));
+    if (!aEvent.Records ||
+         aEvent.Records.length !== 1 ||
+         aEvent.Records[0].eventSource !== 'aws:ses' ||
+         aEvent.Records[0].eventVersion !== '1.0'
+    ) {
+        return aContext.fail('Error: Expecting event with source aws:ses and version 1.0, but received: ' + JSON.stringify(aEvent));
     }
 
-    var email = event.Records[0].ses.mail,
-      recipients = event.Records[0].ses.receipt.recipients;
+    var recipients = aEvent.Records[0].ses.receipt.recipients;
+    console.log('Origin recipients:', recipients.join(', '));
 
-    // Determine new recipient
-    var forwardEmails = [];
-    recipients.forEach(function (origEmail) {
-        if (config.forwardMapping.hasOwnProperty(origEmail)) {
-            forwardEmails = forwardEmails.concat(config.forwardMapping[origEmail]);
-        }
-    });
+    // Determine new recipients
+    var forwardRecipients = [], fm = config.forwardMapping;
+    for (var i = 0, len = recipients.length; i < len; i++) {
+        forwardRecipients = forwardRecipients.concat(fm[recipients[i]] || []);
+    }
+    console.log('Forward recipients:', forwardRecipients.join(', '));
 
-    // Copying email object to ensure read permission
-    console.log('Loading email s3://' + config.emailBucket + '/' + config.emailKeyPrefix + email.messageId);
-    s3.copyObject({
+    // Loadind raw email from S3
+    var email = aEvent.Records[0].ses.mail;
+    console.log('Loading email s3://' + config.emailBucket + '/' + config.emailKeyPrefix + email.messageId + '...');
+    s3.getObject({
         Bucket: config.emailBucket,
-        CopySource: config.emailBucket + '/' + config.emailKeyPrefix + email.messageId,
-        Key: config.emailKeyPrefix + email.messageId,
-        ACL: 'private',
-        ContentType: 'text/plain',
-        StorageClass: 'STANDARD'
-    }, function(err, data) {
-        if (err) {
-            console.log(err, err.stack);
-            return context.fail('Error: Could not make readable copy of email.');
+        Key: config.emailKeyPrefix + email.messageId
+    }, function (aErr, aData) {
+        if (aErr) {
+            console.log(aErr, aErr.stack);
+            return aContext.fail('Error: Failed to load message body from S3: ' + aErr);
         }
 
-        // Load the raw email from S3
-        s3.getObject({
-            Bucket: config.emailBucket,
-            Key: config.emailKeyPrefix + email.messageId
-        }, function (err, data) {
-            if (err) {
-                console.log(err, err.stack);
-                return context.fail('Error: Failed to load message body from S3: ' + err);
+        // SES does not allow sending messages from an unverified address,
+        // so the message's "From:", "Sender:" and "Return-Path:" headers are
+        // replaced the original recipient (which is a verified domain) and
+        // any "Reply-To:" header is replaced with the original sender.
+        var rawEmail = {
+            Destinations: forwardRecipients,
+            Source: recipients[0],
+            RawMessage: {
+                Data: aData.Body.toString()
+                    .replace(/^Return-Path: .*/m, 'Return-Path: <' + recipients[0] + '>')
+                    .replace(/^Sender: .*/m, 'Sender: ' + recipients[0])
+                    .replace(/^Reply-To: (.*)/m, '')
+                    .replace(/^From: (.*)/m, function (aMatch, aFrom) {
+                        return 'From: ' + (
+                            /<(?=([^>]+))\1>/.test(aFrom) ? aFrom.replace(/<[^>]+>/, '<' + recipients[0] + '>') : recipients[0]
+                        ) + '\r\nReply-To: ' + email.source;
+                    })
             }
+        };
 
-            console.log('Loaded email body. Preparing to send raw email to: ' + forwardEmails.join(', '));
-            var message = data.Body.toString();
-
-            // SES does not allow sending messages from an unverified address,
-            // so replace the message's "From:" header with the original
-            // recipient (which is a verified domain) and replace any
-            // "Reply-To:" header with the original sender.
-            message = message.replace(/^Reply-To: (.*)/m, '');
-            message = message.replace(/^From: (.*)/m, function (match, from) {
-                return 'From: ' + from.replace('<', '(').replace('>', ')') + ' via ' + recipients[0] + ' <' + recipients[0] + '>\nReply-To: ' + email.source;
-            });
-
-            // Send email using the SES sendRawEmail command
-            var params = {
-                Destinations: forwardEmails,
-                Source: recipients[0],
-                RawMessage: {
-                    Data: message
-                }
-            };
-            ses.sendRawEmail(params, function (err, data) {
-                if (err) {
-                    console.log(err, err.stack);
-                    context.fail('Error: Email sending failed.');
-                }
-                else {
-                    console.log(data);
-                    context.succeed('Email successfully forwarded for ' + recipients.join(', ') + ' to ' + forwardEmails.join(', '));
-                }
-            });
+        // Send email using the SES sendRawEmail command
+        console.log('Email body is alterer and about to be send.');
+        ses.sendRawEmail(rawEmail, function (aErr, aData) {
+            if (aErr) {
+                console.log(aErr, aErr.stack);
+                console.log('Failed to be sent message:\n' + JSON.stringify(rawEmail, null, '    '));
+                aContext.fail('Error: Email sending failed.');
+            } else {
+                console.log(aData);
+                aContext.succeed('Email has been successfully forwarded for ' + recipients.join(', ') + ' to ' + forwardRecipients.join(', '));
+            }
         });
     });
 };
