@@ -52,93 +52,8 @@ the email forwarding mapping from original destinations to new destination.
 
 3. Configure the IAM role you created for the Lambda function to have policies
 that grant access to get and put objects in the S3 bucket and to send raw emails
-using SES.
+using SES. See sample policy below:
 
-4. In AWS SES, verify the domains for which you want to receive and forward
-email. Also configure the DNS MX record for these domains to point to the SES
-endpoint provided.
-
-5. If you have the sandbox level of access to SES, then also verify any email
-addresses to which you want to forward email that are not on verified domains.
-
-6. If you have not configured inbound email handling, create a new Rule Set.
-Otherwise, you can use an existing one.
-
-7. Create a rule for handling email forwarding functionality.
-
- - On the Recipients configuration page, add any email addresses from which you
- want to forward email.
-
- - On the Actions configuration page, add an S3 action first and then an Lambda
- action.
-
- - For the S3 action: Create or choose an existing S3 bucket. Optionally, add an
- object key prefix. Leave KMS Key and SNS Topic set to [none].
-
- - For the Lambda action: Choose the SesForwarder Lambda function. Leave
- Invocation Type and SNS Topic set to [none].
-
- - Finish by naming the rule, ensuring it's enabled and that spam and virus
- checking are used.
-
-8. The S3 bucket policy needs to be configured so that your IAM user has read
-access to the S3 bucket. When you set up the S3 action in SES, it may
-add a bucket policy statement that denies all users other than root access to
-get objects. This causes access issues from the Lambda script, so you may need
-to replace the deny statement with one like this:
-```
-{
-  "Sid": "AllowEmailUsersRoles",
-  "Effect": "Allow",
-  "Principal": {
-    "AWS": [
-      "arn:aws:iam::AWS-ACCOUNT-ID:root",
-      "arn:aws:iam::AWS-ACCOUNT-ID:user/MY-AWS-USER-NAME",
-      "arn:aws:iam::AWS-ACCOUNT-ID:role/LAMBDA-IAM-ROLE-NAME"
-    ]
-  },
-  "Action": [
-    "s3:GetObjectAcl",
-    "s3:GetObject",
-    "s3:PutObjectAcl",
-    "s3:PutObject"
-  ],
-  "Resource": "arn:aws:s3:::S3-BUCKET-NAME/*"
-}
-```
-
-9. Optionally set the S3 lifecycle for this bucket to delete/expire objects
-after a few days to clean up the saved emails.
-
-## Troubleshooting
-
-Test the configuration by sending emails to recipient addresses.
-
-- If you receive a bounce from AWS with the message `"This message could not be
-delivered due to a recipient error."`, then the rules could not be executed.
-Check the configuration of the rules.
-
-- Check if you find an object associated with the message in the S3 bucket.
-
-- If your Lambda script has syntax mistakes or hits an error, these are logged
-in CloudWatch. Click on "Logs" in the CloudWatch menu, and you should find a log
-group for the Lambda function.
-
-- If you see `There was an error loading Log Streams. Please try again by refreshing this page.`
-error there, ensure that Lambda execution
-IAM role has access to CloudWatch Logs. If it has, but the problem persists,
-wait for several hours or a day and check CloudWatch Logs after that.
-
-- If you see `[MessageRejected: Email address is not verified.]` error in logs,
-ensure that a) all sender headers are properly altered, b) you've raised your
-limits out of sandbox, c) sender email address is in verified domain.
-
-## Credits
-
-Based on the work of @eleven41 and @mwhouser from:
-https://github.com/eleven41/aws-lambda-send-ses-email
-
-My Lambda Execution IAM Role Policy:
 ```
 {
     "Version": "2012-10-17",
@@ -179,7 +94,39 @@ My Lambda Execution IAM Role Policy:
 }
 ```
 
-My S3 Bucket Policy:
+
+4. In AWS SES, verify the domains for which you want to receive and forward
+email. Also configure the DNS MX record for these domains to point to the SES
+endpoint provided.
+
+5. If you have the sandbox level of access to SES, then also verify any email
+addresses to which you want to forward email that are not on verified domains.
+
+6. If you have not configured inbound email handling, create a new Rule Set.
+Otherwise, you can use an existing one.
+
+7. Create a rule for handling email forwarding functionality.
+
+ - On the Recipients configuration page, add any email addresses from which you
+ want to forward email.
+
+ - On the Actions configuration page, add an S3 action first and then an Lambda
+ action.
+
+ - For the S3 action: Create or choose an existing S3 bucket. Optionally, add an
+ object key prefix. Leave KMS Key and SNS Topic set to [none].
+
+ - For the Lambda action: Choose the SesForwarder Lambda function. Leave
+ Invocation Type and SNS Topic set to [none].
+
+ - Finish by naming the rule, ensuring it's enabled and that spam and virus
+ checking are used.
+
+8. The S3 bucket policy needs to be configured so that your IAM user has read
+access to the S3 bucket. When you set up the S3 action in SES, it may
+add a bucket policy statement that denies all users other than root access to
+get objects. This causes access issues from the Lambda script, so you may need
+to replace the deny statement with one like this:
 ```
 {
   "Version": "2008-10-17",
@@ -199,3 +146,34 @@ My S3 Bucket Policy:
   ]
 }
 ```
+
+9. Optionally set the S3 lifecycle for this bucket to delete/expire objects
+after a few days to clean up the saved emails.
+
+## Troubleshooting
+
+Test the configuration by sending emails to recipient addresses.
+
+- If you receive a bounce from AWS with the message `"This message could not be
+delivered due to a recipient error."`, then the rules could not be executed.
+Check the configuration of the rules.
+
+- Check if you find an object associated with the message in the S3 bucket.
+
+- If your Lambda script has syntax mistakes or hits an error, these are logged
+in CloudWatch. Click on "Logs" in the CloudWatch menu, and you should find a log
+group for the Lambda function.
+
+- If you see `There was an error loading Log Streams. Please try again by refreshing this page.`
+error there, ensure that Lambda execution
+IAM role has access to CloudWatch Logs. If it has, but the problem persists,
+wait for several hours or a day and check CloudWatch Logs after that.
+
+- If you see `[MessageRejected: Email address is not verified.]` error in logs,
+ensure that a) all sender headers are properly altered, b) you've raised your
+limits out of sandbox, c) sender email address is in verified domain.
+
+## Credits
+
+Based on the work of @eleven41 and @mwhouser from:
+https://github.com/eleven41/aws-lambda-send-ses-email
