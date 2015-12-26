@@ -18,7 +18,7 @@ From header is changed to display the original sender but to be sent from the
 original destination. An example of the modified headers is:
 
   ```
-  From: Jane Example (jane@example.com) via info@example.com <info@example.com>
+  From: Jane Example <info@example.com>
   Reply-To: jane@example.com
   ```
 
@@ -82,7 +82,7 @@ Otherwise, you can use an existing one.
  checking are used.
 
 8. The S3 bucket policy needs to be configured so that your IAM user has read
-and write access to the S3 bucket. When you set up the S3 action in SES, it may
+access to the S3 bucket. When you set up the S3 action in SES, it may
 add a bucket policy statement that denies all users other than root access to
 get objects. This causes access issues from the Lambda script, so you may need
 to replace the deny statement with one like this:
@@ -124,7 +124,78 @@ Check the configuration of the rules.
 in CloudWatch. Click on "Logs" in the CloudWatch menu, and you should find a log
 group for the Lambda function.
 
+- If you see `There was an error loading Log Streams. Please try again by refreshing this page.`
+error there, ensure that Lambda execution
+IAM role has access to CloudWatch Logs. If it has, but the problem persists,
+wait for several hours or a day and check CloudWatch Logs after that.
+
+- If you see `[MessageRejected: Email address is not verified.]` error in logs,
+ensure that a) all sender headers are properly altered, b) you've raised your
+limits out of sandbox, c) sender email address is in verified domain.
+
 ## Credits
 
 Based on the work of @eleven41 and @mwhouser from:
 https://github.com/eleven41/aws-lambda-send-ses-email
+
+My Lambda Execution IAM Role Policy:
+```
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "GiveLambdaFunctionPermissionToWriteLogs",
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": [
+                "arn:aws:logs:::*"
+            ]
+        },
+        {
+            "Sid": "GiveLambdaFunctionPermissionToReadEmailsFromS3",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::bucket_name/email_prefix/*"
+            ]
+        },
+        {
+            "Sid": "GiveLambdaFunctionPermissionToSendRawEmailFromSES",
+            "Effect": "Allow",
+            "Action": [
+                "ses:SendRawEmail"
+            ],
+            "Resource": [
+                "*"
+            ]
+        }
+    ]
+}
+```
+
+My S3 Bucket Policy:
+```
+{
+  "Version": "2008-10-17",
+  "Statement": [
+    {
+      "Sid": "GiveSESPermissionToWriteEmail",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "ses.amazonaws.com"
+      },
+      "Action": [
+        "s3:PutObjectAcl",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::bucket_name/email_prefix"
+    }
+  ]
+}
+```
